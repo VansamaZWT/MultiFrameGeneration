@@ -25,6 +25,8 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
     num_shaders = 6*(round(1/alpha) - 1)  # 例如有3次计算着色器调用
     queries_start = glGenQueries(num_shaders)
     queries_end = glGenQueries(num_shaders)
+    query = GLuint(0)
+    glGenQueries(1, ctypes.byref(query))
     timer_counter = 0
     for i in range(round(1/alpha) - 1):
         mv1_tex = create_texture(mv_1, width, height)
@@ -68,13 +70,15 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
         num_groups_y = math.ceil(height / 8)
 
 
-        glQueryCounter(queries_start[timer_counter], GL_TIME_ELAPSED)
-        
+
+        # 开始查询
+        glBeginQuery(GL_TIME_ELAPSED, queries_start[timer_counter])
 
         glDispatchCompute(num_groups_x, num_groups_y, 1)
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
-        glQueryCounter(queries_end[timer_counter], GL_TIME_ELAPSED)
+
+        glEndQuery(GL_TIME_ELAPSED)
         timer_counter+=1
 
         glUseProgram(programs[1])
@@ -101,12 +105,12 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
         num_groups_y = math.ceil(height / 8)
 
 
-        glQueryCounter(queries_start[timer_counter], GL_TIME_ELAPSED)
+        glBeginQuery(GL_TIME_ELAPSED, queries_start[timer_counter])
 
         glDispatchCompute(num_groups_x, num_groups_y, 1)
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
-        glQueryCounter(queries_end[timer_counter], GL_TIME_ELAPSED)
+        glEndQuery(GL_TIME_ELAPSED)
         timer_counter+=1
 
         warp_mv1_0 = read_texture(warp_mv1_tex, width, height)
@@ -142,12 +146,12 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
         num_groups_x = math.ceil(width / 8)
         num_groups_y = math.ceil(height / 8)
 
-        glQueryCounter(queries_start[timer_counter], GL_TIME_ELAPSED)
+        glBeginQuery(GL_TIME_ELAPSED, queries_start[timer_counter])
 
         glDispatchCompute(num_groups_x, num_groups_y, 1)
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
-        glQueryCounter(queries_end[timer_counter], GL_TIME_ELAPSED)
+        glEndQuery(GL_TIME_ELAPSED)
         timer_counter+=1
 
         inpaint_mv1 = read_texture(inpaint_mv1_tex, width, height)
@@ -165,12 +169,12 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
         num_groups_x = math.ceil(width / 8)
         num_groups_y = math.ceil(height / 8)
 
-        glQueryCounter(queries_start[timer_counter], GL_TIME_ELAPSED)
+        glBeginQuery(GL_TIME_ELAPSED, queries_start[timer_counter])
 
         glDispatchCompute(num_groups_x, num_groups_y, 1)
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
-        glQueryCounter(queries_end[timer_counter], GL_TIME_ELAPSED)
+        glEndQuery(GL_TIME_ELAPSED)
         timer_counter+=1
 
         inpaint_mv2 = read_texture(inpaint_mv2_tex, width, height)
@@ -212,12 +216,12 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
         num_groups_x = math.ceil(width / 8)
         num_groups_y = math.ceil(height / 8)
 
-        glQueryCounter(queries_start[timer_counter], GL_TIME_ELAPSED)
+        glBeginQuery(GL_TIME_ELAPSED, queries_start[timer_counter])
 
         glDispatchCompute(num_groups_x, num_groups_y, 1)
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
-        glQueryCounter(queries_end[timer_counter], GL_TIME_ELAPSED)
+        glEndQuery(GL_TIME_ELAPSED)
         timer_counter+=1
 
         mask_1_texs.append(mask_1_tex)
@@ -251,12 +255,12 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
         num_groups_x = math.ceil(width / 8)
         num_groups_y = math.ceil(height / 8)
 
-        glQueryCounter(queries_start[timer_counter], GL_TIME_ELAPSED)
+        glBeginQuery(GL_TIME_ELAPSED, queries_start[timer_counter])
 
         glDispatchCompute(num_groups_x, num_groups_y, 1)
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
-        glQueryCounter(queries_end[timer_counter], GL_TIME_ELAPSED)
+        glEndQuery(GL_TIME_ELAPSED)
         timer_counter+=1
 
         gen_color = read_texture(gen_color_tex, width, height)
@@ -265,20 +269,24 @@ def mul_gen_I(mv_0,mv_1,depth_0,depth_1,color_0,color_1,world_pos_0,world_pos_1,
 
         # print("queries_end:", queries_end)
         # # 确保所有查询数据可用
-    done = False
+    done = GLint(0)
     while not done:
-        done = all(glGetQueryObjectiv(q, GL_QUERY_RESULT_AVAILABLE) for q in queries_end)
+        all(glGetQueryObjectiv(q, GL_QUERY_RESULT_AVAILABLE, ctypes.byref(done)) for q in queries_start)
 
+    # elapsed_time = GLuint64(0)
+    # glGetQueryObjectui64v(query, GL_QUERY_RESULT, ctypes.byref(elapsed_time))
+    # elapsed_ms = elapsed_time.value / 1_000_000.0
+    # print(f" execution time: {elapsed_ms:.2f} ms")
         # 计算每个计算着色器的运行时间
     total_gpu_time_ns = 0
     for i in range(num_shaders):
-        start_time = glGetQueryObjectuiv(queries_start[i], GL_QUERY_RESULT)
-        end_time = glGetQueryObjectuiv(queries_end[i], GL_QUERY_RESULT)
-        shader_time_ns = end_time - start_time
-        total_gpu_time_ns += shader_time_ns
+        start_time = GLuint64(0)
+        glGetQueryObjectuiv(queries_start[i], GL_QUERY_RESULT, ctypes.byref(start_time))
 
+        total_gpu_time_ns += start_time.value
         # 转换为毫秒
-    total_gpu_time_ms = total_gpu_time_ns
+    total_gpu_time_ms = total_gpu_time_ns/ 1_000_000.0
+    glDeleteQueries(len(queries_start),queries_start)
 
     return gen_colors,warp_color_1s,warp_color_2s,inpaint_mv1s,inpaint_mv2s,total_gpu_time_ms
 
