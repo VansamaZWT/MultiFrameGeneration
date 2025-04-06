@@ -1,0 +1,100 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D world_pos;
+layout(binding = 1) uniform sampler2D world_pos_1;
+layout(binding = 2) uniform sampler2D mv;
+layout(binding = 3) uniform sampler2D color;
+layout(binding = 4) uniform sampler2D depth;
+layout(binding = 5) uniform sampler2D stencil;
+layout(binding = 6) uniform sampler2D background_buffer_color0;
+layout(binding = 7) uniform sampler2D background_buffer_color1;
+layout(binding = 8) uniform sampler2D background_buffer_depth0;
+layout(binding = 9) uniform sampler2D background_buffer_depth1;
+layout(binding = 10) uniform sampler2D background_buffer_worldposition0;
+layout(binding = 11) uniform sampler2D background_buffer_worldposition1;
+
+uniform mat4 vp_matrix_pre;
+uniform mat4 vp_matrix;
+uniform mat4 vp_matrix_next;
+
+layout(rgba32f, binding = 0) uniform image2D warp_background_buffer_color0;
+layout(rgba32f, binding = 1) uniform image2D warp_background_buffer_color1;
+layout(r32ui, binding = 2) uniform uimage2D warp_background_buffer_depth0;
+layout(r32ui, binding = 3) uniform uimage2D warp_background_buffer_depth1;
+layout(rgba32f,binding = 4) uniform image2D warp_background_buffer_worldposition0;
+layout(rgba32f,binding = 5) uniform image2D warp_background_buffer_worldposition1;
+void main(){
+    ivec2 pixCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 pixCoord1 = pixCoord/2;
+    ivec2 frameSize = textureSize(color, 0);
+    if (pixCoord.x >= frameSize.x || pixCoord.y >= frameSize.y) {
+		return;
+	}
+	vec2 size = vec2(frameSize);
+
+    vec3 world_pos_cur = texelFetch(world_pos, pixCoord, 0).xyz;
+    float dynamic = texelFetch(stencil, pixCoord, 0).x;
+    vec4 buffer_color0 = vec4(0,0,0,0);
+    vec4 buffer_color1 = vec4(0,0,0,0);
+    float buffer_depth0 = 0;
+    float buffer_depth1 = 0;
+    uint buffer_depth_int0 = 2147483647;
+
+    uint buffer_depth_int1 = 2147483647;
+    vec4 buffer_worldposition0 = vec4(0,0,0,0);
+    vec4 buffer_worldposition1 = vec4(0,0,0,0);
+    uint layer1_flag = 0;
+    //static fragments process
+    if (dynamic < 0.5) {
+        //valid B0
+        buffer_color0 = texelFetch(color, pixCoord, 0);
+        buffer_worldposition0 = texelFetch(world_pos,pixCoord,0);
+        imageStore(warp_background_buffer_color0, pixCoord, buffer_color0);
+        imageStore(warp_background_buffer_worldposition0, pixCoord, buffer_worldposition0);
+    }
+    memoryBarrier();
+    //warp B0
+    vec4 pre_buffer_color0 = texelFetch(background_buffer_color0, pixCoord, 0);
+    vec3 pre_buffer_worldposition0 = texelFetch(background_buffer_worldposition0, pixCoord,0).xyz;
+    if(pre_buffer_color0.w!=0){
+        vec4 pre_ndc_pre0 = transpose(vp_matrix_pre) * vec4(pre_buffer_worldposition0, 1.0);
+        pre_ndc_pre0.xyz = pre_ndc_pre0.xyz / pre_ndc_pre0.w;
+        vec4 pre_ndc_cur0 = transpose(vp_matrix) * vec4(pre_buffer_worldposition0, 1.0);
+        pre_ndc_cur0.xyz = pre_ndc_cur0.xyz / pre_ndc_cur0.w;
+        vec2 pre_forw_mv0 = (pre_ndc_cur0.xy - pre_ndc_pre0.xy) * vec2(frameSize) / 2;
+        ivec2 forw_0 = ivec2(round(pre_forw_mv0.x),round(pre_forw_mv0.y));
+        ivec2 forw_pos0 = ivec2(pixCoord.x + forw_0.x, pixCoord.y - forw_0.y);//maybe wrong
+        vec4 inpaint_target_color0 = imageLoad(warp_background_buffer_color0, forw_pos0);
+        float pix_depth0 = pre_ndc_cur0.z;
+        uint pix_depth_int0 = int(pix_depth0 * 65535);
+        uint pre_depth = imageAtomicMax(warp_background_buffer_depth0, forw_pos0, pix_depth_int0);
+        if(pre_depth>pix_depth_int0){
+            pre_depth = pix_depth_int0;
+        }
+
+        if(pre_depth!=0){
+            imageAtomicMax(warp_background_buffer_depth1, forw_pos0/2, pre_depth);
+        }
+
+        memoryBarrier();
+        inpaint_target_color0 = imageLoad(warp_background_buffer_color0, forw_pos0);
+        if(inpaint_target_color0.w == 0){
+            uint pix_depth_int_cur = imageLoad(warp_background_buffer_depth0, forw_pos0).x;
+            if (pix_depth_int0 == pix_depth_int_cur) {
+                // forward warp
+                imageStore(warp_background_buffer_color0, forw_pos0,pre_buffer_color0);
+                imageStore(warp_background_buffer_worldposition0, forw_pos0, vec4(pre_buffer_worldposition0, 1.0));
+            }
+            
+        }else{
+            uint pix_depth_int_cur = imageLoad(warp_background_buffer_depth1, forw_pos0/2).x;
+            if (pre_depth == pix_depth_int_cur&&pre_depth!=0) {
+                // forward warp
+                imageStore(warp_background_buffer_color1, forw_pos0/2,pre_buffer_color0);
+                imageStore(warp_background_buffer_worldposition1, forw_pos0/2, vec4(pre_buffer_worldposition0, 1.0));
+            }
+        }
+    }
+}

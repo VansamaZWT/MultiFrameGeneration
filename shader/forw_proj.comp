@@ -1,0 +1,40 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D inpaint_mv;
+layout(binding = 1) uniform sampler2D color;
+layout(binding = 2) uniform sampler2D warp_background_buffer_color0;
+layout(binding = 3) uniform sampler2D warp_background_buffer_depth0;
+layout(binding = 4) uniform sampler2D depth;
+
+layout(rgba32f, binding = 0) writeonly uniform image2D warp_color;
+layout(rgba32f, binding = 1) writeonly uniform image2D warp_mv;
+layout(r32ui, binding = 2) uniform uimage2D warp_depth;
+
+void main(){
+    ivec2 pixCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 frameSize = textureSize(color, 0);
+    if (pixCoord.x >= frameSize.x || pixCoord.y >= frameSize.y) {
+		return;
+	}
+	vec2 size = vec2(frameSize);
+    
+    vec2 pix_mv = texelFetch(inpaint_mv, pixCoord, 0).xy;
+    ivec2 flow = ivec2(round(pix_mv));
+
+	ivec2 forw_pos = ivec2(pixCoord.x + flow.x, pixCoord.y - flow.y);
+
+	// depth test
+	float pix_depth = texelFetch(depth, pixCoord, 0).x;
+	uint pix_depth_int = int(2147483647 - pix_depth * 65535);
+	uint pix_depth_int_prev = imageAtomicMax(warp_depth, forw_pos, pix_depth_int);
+	memoryBarrier();
+
+	uint pix_depth_int_cur = imageLoad(warp_depth, forw_pos).x;
+	if (pix_depth_int == pix_depth_int_cur) {
+		// forward warp
+		vec3 pix_color = texelFetch(color, pixCoord, 0).xyz;
+		imageStore(warp_color, forw_pos, vec4(pix_color, 1.0));
+	}
+}

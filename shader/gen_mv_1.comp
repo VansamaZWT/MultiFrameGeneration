@@ -1,0 +1,89 @@
+# version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D mv0;
+layout(binding = 1) uniform sampler2D mv1;
+layout(binding = 2) uniform sampler2D depth;
+layout(binding = 3) uniform sampler2D color;
+layout(binding = 4) uniform sampler2D stencil0;
+layout(binding = 5) uniform sampler2D stencil1;
+layout(binding = 6) uniform sampler2D world_pos1;
+layout(binding = 7) uniform sampler2D world_pos2;
+
+uniform float alpha;  
+
+uniform mat4 vp_matrix_0; // t帧的VP矩阵
+uniform mat4 vp_matrix_1;    // t+1帧的VP矩阵
+uniform mat4 vp_matrix_gen; // t+aphla帧的VP矩阵
+
+layout(rgba32f, binding = 0) writeonly uniform image2D  warp_mv1;
+layout(rgba32f, binding = 1) writeonly uniform image2D  warp_mv2;
+layout(r32ui, binding = 2) uniform uimage2D warp_depth;
+
+
+void main() {
+    ivec2 pixCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 frame_size = textureSize(color, 0);
+    if (pixCoord.x < 0 || pixCoord.y < 0 || pixCoord.x >= frame_size.x || pixCoord.y >= frame_size.y) {
+        return;
+    }
+    vec2 size = vec2(frame_size);
+
+	float dynamic = texelFetch(stencil1, pixCoord, 0).x;
+    vec2 flow_save_0 = vec2(0.0, 0.0);
+    vec2 flow_save_1 = vec2(0.0, 0.0);
+    vec2 pix_mv_1 = texelFetch(mv1, pixCoord, 0).xy;
+    pix_mv_1.y = -pix_mv_1.y;
+    vec2 back_proj = vec2(pixCoord) - pix_mv_1;
+	if (dynamic > 0.5) {
+		//dynamic fgsr_me
+        vec2 pix_mv_0 = texelFetch(mv0, ivec2(round(back_proj)), 0).xy;
+        pix_mv_0.y = -pix_mv_0.y;
+        flow_save_1 = -pix_mv_1 + alpha / 2 * (pix_mv_0 + pix_mv_1) + pow(alpha, 2) / 2 * (pix_mv_1 - pix_mv_0);
+
+        //flow_save_0 = flow_save_1 + pix_mv_1;
+        // vec3 world_pos_cur = texelFetch(world_pos2, pixCoord, 0).xyz;
+		// vec3 world_pos_prev = texelFetch(world_pos1, ivec2(round(back_proj)), 0).xyz;
+		// vec3 world_pos_gen = world_pos_cur + alpha * (world_pos_cur - world_pos_prev);
+
+        // vec4 ndc_gen = transpose(vp_matrix_gen) * vec4(world_pos_gen, 1.0);
+        // ndc_gen.xyz = ndc_gen.xyz / ndc_gen.w;
+        // vec4 ndc_cur = transpose(vp_matrix_1) * vec4(world_pos_cur, 1.0);
+        // ndc_cur.xyz = ndc_cur.xyz / ndc_cur.w;
+        // flow_save_1 = (ndc_gen.xy - ndc_cur.xy) * vec2(frame_size) / 2;
+        //flow_save_0 = flow_save_1 + pix_mv_1;
+	}
+    else {
+        //static gffe_me
+        vec3 world_pos_cur = texelFetch(world_pos2, pixCoord, 0).xyz;
+        vec4 ndc_gen = transpose(vp_matrix_gen) * vec4(world_pos_cur, 1.0);
+        ndc_gen.xyz = ndc_gen.xyz / ndc_gen.w;
+        vec4 ndc_cur = transpose(vp_matrix_1) * vec4(world_pos_cur, 1.0);
+        ndc_cur.xyz = ndc_cur.xyz / ndc_cur.w;
+        flow_save_1 = (ndc_gen.xy - ndc_cur.xy) * vec2(frame_size) / 2;
+
+        // vec2 pix_mv_0 = texelFetch(mv0, ivec2(round(back_proj)), 0).xy;
+        // pix_mv_0.y = -pix_mv_0.y;
+        // flow_save_1 = -pix_mv_1 + alpha / 2 * (pix_mv_0 + pix_mv_1) + pow(alpha, 2) / 2 * (pix_mv_1 - pix_mv_0);
+
+        flow_save_0 = vec2(flow_save_1.x + pix_mv_1.x,flow_save_1.y-pix_mv_1.y);
+    }
+    // depth test
+    ivec2 flow = ivec2(round(flow_save_1));
+	ivec2 forw_pos = ivec2(pixCoord.x + flow.x, pixCoord.y - flow.y);
+	float pix_depth = texelFetch(depth, pixCoord, 0).x;
+    if(pix_depth>100){
+        return;
+    }
+	uint pix_depth_int = int(2147483647 - pix_depth * 65535);
+	uint pix_depth_int_prev = imageAtomicMax(warp_depth, forw_pos, pix_depth_int);
+	memoryBarrier();
+
+	uint pix_depth_int_cur = imageLoad(warp_depth, forw_pos).x;
+	if (pix_depth_int == pix_depth_int_cur) {
+		// forward warp
+		imageStore(warp_mv1, forw_pos, vec4(flow_save_1.x, -flow_save_1.y, 0.0, 1.0));
+        if(dynamic>0.5)imageStore(warp_mv2,forw_pos, vec4(flow_save_0.x, -flow_save_0.y, 0.0, 1.0));
+	}
+}
